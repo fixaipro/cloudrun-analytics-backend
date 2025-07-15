@@ -1,6 +1,6 @@
 # Cloud Run Analytics Backend (All 9 Functions)
 
-This repository contains a Flask-based service for Google Cloud Run with nine analysis modules.
+This repository contains a Flask-based service for Google Cloud Run with nine analysis modules
 
 ## Files
 
