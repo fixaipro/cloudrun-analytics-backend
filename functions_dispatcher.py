@@ -1,9 +1,7 @@
-from analytics_modules.all_analysis_scripts import analysis_a, analysis_b
+from analytics_modules import all_analysis_dispatch
 
 def dispatch(report_type, file_url):
-    if report_type == 'A':
-        return analysis_a(file_url)
-    elif report_type == 'B':
-        return analysis_b(file_url)
-    else:
+    if report_type not in all_analysis_dispatch.mapping:
         raise ValueError(f"Unknown report type: {report_type}")
+    # call the corresponding function
+    return all_analysis_dispatch.mapping[report_type](file_url)
