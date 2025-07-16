@@ -4,3 +4,7 @@ numpy
 matplotlib
 statsmodels
 openpyxl
+Flask==2.2.5
+pandas==1.6.2
+matplotlib==3.8.1
+causalimpact==0.2.2
