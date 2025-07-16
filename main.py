@@ -1,140 +1,90 @@
 # main.py
-import io
-import os
-import base64
-import json
-import urllib.request
 
+import io
+import base64
 import pandas as pd
-import numpy as np
+from flask import Flask, request, jsonify, make_response
 import matplotlib.pyplot as plt
-import statsmodels.api as sm
-from flask import Flask, request, jsonify
+from causalimpact import CausalImpact
 
 app = Flask(__name__)
 
-def fetch_csv(url: str) -> pd.DataFrame:
-    """
-    Fetch a published-CSV Google Sheet (or any CSV) at `url` into a DataFrame.
-    """
-    resp = urllib.request.urlopen(url)
-    return pd.read_csv(io.TextIOWrapper(resp, 'utf-8'))
-
-def compute_causal_impact(df: pd.DataFrame):
-    """
-    Given a DataFrame with columns ['date','control','conversions'], 
-    index date, returns summary dict + Matplotlib fig.
-    """
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.set_index('date').sort_index()
-    pre, post = df.iloc[:40], df.iloc[40:]
-
-    # Fit on pre
-    X0 = sm.add_constant(pre['control'])
-    y0 = pre['conversions']
-    model = sm.OLS(y0, X0).fit()
-
-    # Predict post
-    X1 = sm.add_constant(post['control'])
-    pred = model.predict(X1)
-
-    # Impact
-    actual = post['conversions']
-    impact = actual - pred
-    avg_lift = impact.mean()
-    cum_lift = impact.sum()
-    se = impact.std() / np.sqrt(len(impact))
-    ci_low, ci_high = avg_lift - 1.96*se, avg_lift + 1.96*se
-
-    # Build the plot
-    fig, ax = plt.subplots(figsize=(10,5))
-    ax.plot(df.index, df['conversions'], label='Actual', lw=2)
-    ax.plot(post.index, pred, '--', label='Predicted (counterfactual)', lw=2)
-    ax.axvline(df.index[39], color='red', ls='--', label='Intervention')
-    ax.fill_between(post.index,
-                    pred - se,
-                    pred + se,
-                    color='gray', alpha=0.3,
-                    label='Prediction CI')
-    ax.legend(loc='upper left')
-    ax.set_title('Causal Impact Analysis')
-    ax.set_xlabel('Date')
-    ax.set_ylabel('Conversions')
-    ax.grid(True)
-
-    return {
-        'avg_lift': avg_lift,
-        'cum_lift': cum_lift,
-        'ci_low': ci_low,
-        'ci_high': ci_high,
-        'figure': fig
-    }
-
-def fig_to_base64(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode('ascii')
-
-@app.route('/run-analysis', methods=['POST'])
+@app.route("/run-analysis", methods=["POST"])
 def run_analysis():
-    data = request.get_json()
-    sheet_url = data['file_url']            # your published-CSV form responses
-    report_type = data['report_type']       # e.g. "Causal Impact Analysis"
+    # 1) Grab the JSON payload
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "Invalid JSON"}), 400
 
-    # 1) pull the form-responses sheet
-    resp_df = fetch_csv(sheet_url)
+    report_type = payload.get("report_type")
+    file_url    = payload.get("file_url")
+    if not file_url:
+        return jsonify({"error": "`file_url` is required"}), 400
 
-    # 2) assume the last row is the one just submitted
-    last = resp_df.iloc[-1]
-    csv_url = last['File upload']           # adjust if your column header differs
+    # 2) Fetch the CSV directly from the published Google Sheet
+    try:
+        df = pd.read_csv(file_url)
+    except Exception as e:
+        return jsonify({"error": f"Could not read CSV at `{file_url}`: {e}"}), 400
 
-    # 3) pull the user’s data CSV
-    df = fetch_csv(csv_url)
-    #    ensure it has exactly three columns: date, control, conversions
-    df = df.rename(columns={df.columns[0]:'date',
-                            df.columns[1]:'control',
-                            df.columns[2]:'conversions'})
+    # assume the first column is a date, second column is the metric
+    df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+    df.set_index(df.columns[0], inplace=True)
+    ts = df.iloc[:, 0]
 
-    # 4) compute
-    result = compute_causal_impact(df)
+    # 3) Choose your pre/post split — here I do first 50% / second 50%
+    n = len(ts)
+    pre_period  = [ts.index[0],            ts.index[n//2 - 1]]
+    post_period = [ts.index[n//2],         ts.index[-1]]
 
-    # 5) build HTML
-    plot_b64 = fig_to_base64(result['figure'])
-    summary_html = f"""
-      <table>
-        <tr><th>Metric</th><th>Value</th></tr>
-        <tr><td>Avg. Lift</td><td>{result['avg_lift']:.2f}</td></tr>
-        <tr><td>Cumulative Lift</td><td>{result['cum_lift']:.2f}</td></tr>
-        <tr><td>95% CI</td><td>[{result['ci_low']:.2f}, {result['ci_high']:.2f}]</td></tr>
-      </table>
-    """
+    # 4) Run CausalImpact
+    ci = CausalImpact(ts, pre_period, post_period)
 
+    # 5) Pull out the key numbers
+    summary = ci.summary_data
+    avg_lift       = summary.loc["Average causal effect", "Average"]
+    cum_lift       = summary.loc["Cumulative causal effect", "Cumulative"]
+    lower, upper   = ci.summary_output["report"]["Cumulative causal effect"]["0.975"], \
+                     ci.summary_output["report"]["Cumulative causal effect"]["0.025"]
+
+    # 6) Render the time-series plot to a PNG and base64 it
+    fig = ci.plot()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    img_b64 = base64.b64encode(buf.read()).decode("ascii")
+
+    # 7) Build the final HTML
     html = f"""
-    <!doctype html>
     <html>
       <head>
-        <meta charset="utf-8">
         <title>{report_type}</title>
         <style>
-          body {{ font-family: Arial, sans-serif; padding: 20px; }}
-          table {{ border-collapse: collapse; margin-bottom: 20px; }}
-          th, td {{ border: 1px solid #ccc; padding: 8px; text-align: right; }}
-          th {{ background: #f7f7f7; }}
-          img {{ max-width: 100%; height: auto; }}
+          body {{ font-family: Arial,sans-serif; padding:20px; }}
+          table {{ border-collapse: collapse; width:50%; margin-bottom:20px; }}
+          th, td {{ border:1px solid #ccc; padding:8px; text-align:right; }}
+          th {{ background:#f5f5f5; }}
         </style>
       </head>
       <body>
         <h1>{report_type}</h1>
-        {summary_html}
+        <table>
+          <tr><th>Metric</th><th>Value</th></tr>
+          <tr><td>Avg. Lift</td><td>{avg_lift:.2f}</td></tr>
+          <tr><td>Cumulative Lift</td><td>{cum_lift:.2f}</td></tr>
+          <tr><td>95% CI</td>
+              <td>[{lower:.2f}, {upper:.2f}]</td></tr>
+        </table>
         <h2>Time Series Plot</h2>
-        <img src="data:image/png;base64,{plot_b64}" />
+        <img src="data:image/png;base64,{img_b64}" alt="Causal Impact Plot"/>
       </body>
     </html>
     """
 
-    return jsonify({'html': html})
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html"
+    return resp
 
-if __name__ == '__main__':
-    # for local testing
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
