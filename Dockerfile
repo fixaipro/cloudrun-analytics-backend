@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
-# avoid warnings, set non-interactive
+# avoid interactive prompts
 ARG DEBIAN_FRONTEND=noninteractive
 
-# install OS deps for Python builds + R + R dev headers
+# 1) Install OS-level build tools + R + R dev headers
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
@@ -15,17 +15,17 @@ RUN apt-get update \
       r-base-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# ensure pip is up-to-date
+# 2) Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip
 
-# copy in and install Python deps
+# 3) Copy & install Python deps
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy our application
+# 4) Copy your app
 COPY main.py .
 
-# expose & run
+# 5) Expose port and run via gunicorn
 EXPOSE 8080
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8080", "main:app"]
