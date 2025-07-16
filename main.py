@@ -3,12 +3,10 @@ import functions_dispatcher
 
 app = Flask(__name__)
 
-# Health check for GET /
 @app.route('/', methods=['GET'])
 def index():
     return '🚀 Cloud Run analytics backend is live!', 200
 
-# Your real POST endpoint
 @app.route('/run-analysis', methods=['POST'])
 def run_analysis():
     data = request.get_json()
