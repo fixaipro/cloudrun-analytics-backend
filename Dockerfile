@@ -1,28 +1,31 @@
-# Use an official Python runtime as a parent image
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
-# no output buffering
-ENV PYTHONUNBUFFERED TRUE
+# avoid warnings, set non-interactive
+ARG DEBIAN_FRONTEND=noninteractive
 
-# install build tools for any C extensions
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# install OS deps for Python builds + R + R dev headers
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
       build-essential \
       libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+      wget \
+      ca-certificates \
+      r-base \
+      r-base-dev \
+ && rm -rf /var/lib/apt/lists/*
 
-# set working dir
+# ensure pip is up-to-date
+RUN pip install --no-cache-dir --upgrade pip
+
+# copy in and install Python deps
 WORKDIR /app
-
-# install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy app
+# copy our application
 COPY main.py .
 
-# expose port
+# expose & run
 EXPOSE 8080
-
-# use Gunicorn in production
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8080", "main:app"]
