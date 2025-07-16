@@ -4,6 +4,10 @@ import functions_dispatcher
 app = Flask(__name__)
 
 @app.route('/run-analysis', methods=['POST'])
+def index():
+    return '🚀 Cloud Run analytics backend is live!', 200
+
+@app.route('/run-analysis', methods=['POST'])
 def run_analysis():
     data = request.get_json()
     report_type = data.get('report_type')
